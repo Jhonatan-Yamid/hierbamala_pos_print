@@ -111,18 +111,18 @@ async function startCloudflareTunnelAndGetUrl(apiPort) {
   });
 }
 
-// *** MODIFICADO: FUNCIÓN header - Añadido orderType ***
+// *** MODIFICADO: FUNCIÓN header - Añadido más espaciado ***
 function header(dateStr, timeStr, tableNumber, gameInfo, orderType) {
-  let headerText = 'Hierba Mala Gastrobar\r\n';
-  headerText += `*** ${dateStr} ${timeStr} ***\r\n`;
+  let headerText = 'Hierba Mala Gastrobar\r\n\r\n'; // Espacio adicional
+  headerText += `*** ${dateStr} ${timeStr} ***\r\n\r\n`; // Espacio adicional
   headerText += `Mesa: ${tableNumber}\r\n`;
   headerText += `Juego: ${Array.isArray(gameInfo) && gameInfo.length > 0 ? gameInfo.join(', ') : (gameInfo || 'N/A')}\r\n`;
-  headerText += `Tipo Pedido: ${orderType || 'N/A'}\r\n`; // NUEVO: Tipo de pedido
+  headerText += `Tipo Pedido: ${orderType || 'N/A'}\r\n\r\n`; // Espacio adicional
   headerText += '--------------------------\r\n';
   return headerText;
 }
 
-// FUNCIÓN productLine ORIGINAL
+// *** MODIFICADO: FUNCIÓN productLine - Añadido más espaciado ***
 function productLine(p) {
   let line = `${p.quantity}x ${p.name}   $${p.price * p.quantity}\r\n`;
   if (p.observation) {
@@ -133,6 +133,7 @@ function productLine(p) {
       line += `\t+ ${a.name}   $${a.price}\r\n`;
     });
   }
+  line += '\r\n'; // Espacio después de cada línea de producto/adición
   return line;
 }
 
