@@ -11,7 +11,7 @@ const mysql = require('mysql2/promise');
 app.use(cors({
   origin: '*', // Permite cualquier origen. En producción, deberías especificar tu dominio de Next.js (ej: 'https://tuapp.vercel.app')
   methods: ['GET', 'POST', 'PUT', 'DELETE'], // Permite los métodos que usas
-  allowedHeaders: ['Content-Type'], // <-- ¡Añade esta línea! Permite la cabecera Content-Type
+  allowedHeaders: ['Content-Type'], // Permite la cabecera Content-Type
   optionsSuccessStatus: 200 // Para algunos navegadores, 204 No Content puede ser problemático para preflight
 }));
 app.use(express.json());
@@ -25,7 +25,7 @@ const dbConfig = {
   port: 3306
 };
 
-// *** FUNCIÓN updateIPInDatabase ORIGINAL (fusionada con la lógica de Cloudflare) ***
+// FUNCIÓN updateIPInDatabase ORIGINAL (fusionada con la lógica de Cloudflare)
 async function updateIPInDatabase(publicUrl) {
   try {
     const connection = await mysql.createConnection(dbConfig);
@@ -111,18 +111,18 @@ async function startCloudflareTunnelAndGetUrl(apiPort) {
   });
 }
 
-// *** FUNCIÓN header ORIGINAL ***
-function header(dateStr, timeStr, tableNumber, gameInfo) {
+// *** MODIFICADO: FUNCIÓN header - Añadido orderType ***
+function header(dateStr, timeStr, tableNumber, gameInfo, orderType) {
   let headerText = 'Hierba Mala Gastrobar\r\n';
   headerText += `*** ${dateStr} ${timeStr} ***\r\n`;
   headerText += `Mesa: ${tableNumber}\r\n`;
-  // Asumiendo que 'gameInfo' puede ser un string o un array de strings (como en el último JSON de ejemplo)
   headerText += `Juego: ${Array.isArray(gameInfo) && gameInfo.length > 0 ? gameInfo.join(', ') : (gameInfo || 'N/A')}\r\n`;
+  headerText += `Tipo Pedido: ${orderType || 'N/A'}\r\n`; // NUEVO: Tipo de pedido
   headerText += '--------------------------\r\n';
   return headerText;
 }
 
-// *** FUNCIÓN productLine ORIGINAL ***
+// FUNCIÓN productLine ORIGINAL
 function productLine(p) {
   let line = `${p.quantity}x ${p.name}   $${p.price * p.quantity}\r\n`;
   if (p.observation) {
@@ -136,20 +136,20 @@ function productLine(p) {
   return line;
 }
 
-// *** FUNCIÓN footer ORIGINAL ***
+// FUNCIÓN footer ORIGINAL
 function footer(total) {
   return '--------------------------\r\n' + `TOTAL: $${total}\r\n`;
 }
 
-// *** ENDPOINT CAMBIADO A /print ***
+// *** MODIFICADO: ENDPOINT /print - Recibir orderType y generalObservation ***
 app.post('/print', (req, res) => {
-  const { products, total, tableNumber, game, availableGames } = req.body; // 'game' también se recibe por si lo usas
+  const { products, total, tableNumber, game, availableGames, orderType, generalObservation } = req.body; // 'orderType' y 'generalObservation' recibidos
 
   if (
     !products || !Array.isArray(products) || total == null ||
-    tableNumber == null || availableGames == null
+    tableNumber == null || availableGames == null || orderType == null
   ) {
-    return res.status(400).send({ error: 'Faltan datos requeridos: products, total, tableNumber, availableGames' });
+    return res.status(400).send({ error: 'Faltan datos requeridos: products, total, tableNumber, availableGames, orderType' });
   }
 
   const date = new Date();
@@ -157,9 +157,8 @@ app.post('/print', (req, res) => {
   const timeStr = date.toLocaleTimeString('es-CO');
 
   let text = '';
-  // Se pasa 'availableGames' (que es un array en tu JSON más reciente) al header.
-  // La función header lo manejará para unirse o mostrar 'N/A'.
-  text += header(dateStr, timeStr, tableNumber, availableGames);
+  // Se pasa 'orderType' al header
+  text += header(dateStr, timeStr, tableNumber, availableGames, orderType);
 
   products.forEach(p => {
     text += productLine(p);
@@ -167,7 +166,18 @@ app.post('/print', (req, res) => {
 
   text += footer(total);
 
-  const printerName = "IMPRESORA_TERMICA";
+  // NUEVO: Añadir observaciones generales al final de la comanda
+  if (generalObservation) {
+    text += `\r\nObservaciones Generales:\r\n`;
+    text += `${generalObservation}\r\n`;
+  }
+
+  // NUEVO: Espaciado y línea punteada para el corte
+  text += '\r\n\r\n\r\n'; // Espacio
+  text += '--------------------------\r\n'; // Línea punteada
+  text += '\r\n\r\n'; // Espacio adicional después del corte
+
+  const printerName = "IMPRESORA_TERMICA"; // Asegúrate de que este nombre sea el de tu impresora
 
   const tempFilePath = path.join(os.tmpdir(), 'ticket.txt');
 
@@ -180,7 +190,7 @@ app.post('/print', (req, res) => {
     const command = `copy /b "${tempFilePath}" \\\\localhost\\${printerName}`;
 
     exec(command, (error, stdout, stderr) => {
-      fs.unlink(tempFilePath, () => { });
+      fs.unlink(tempFilePath, () => { }); // Eliminar el archivo temporal
 
       if (error) {
         console.error('Error al imprimir:', error);
