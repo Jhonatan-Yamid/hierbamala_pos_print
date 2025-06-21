@@ -1,15 +1,19 @@
-// index.js (version corregida para recibir la URL de ngrok)
-
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const express = require('express');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const app = express();
 const cors = require('cors');
-const mysql = require('mysql2/promise'); // Importa mysql2
+const mysql = require('mysql2/promise');
 
-app.use(cors()); // <- habilita CORS
+// Configuración más explícita de CORS
+app.use(cors({
+  origin: '*', // Permite cualquier origen. En producción, deberías especificar tu dominio de Next.js (ej: 'https://tuapp.vercel.app')
+  methods: ['GET', 'POST', 'PUT', 'DELETE'], // Permite los métodos que usas
+  allowedHeaders: ['Content-Type'], // <-- ¡Añade esta línea! Permite la cabecera Content-Type
+  optionsSuccessStatus: 200 // Para algunos navegadores, 204 No Content puede ser problemático para preflight
+}));
 app.use(express.json());
 
 // Configuración de la base de datos
@@ -21,78 +25,125 @@ const dbConfig = {
   port: 3306
 };
 
-// Esta función ya no se usará para obtener la IP pública de ngrok, pero la mantenemos si la necesitas para otros fines
-// function getIPv4() {
-//   const interfaces = os.networkInterfaces();
-//   for (const interfaceName in interfaces) {
-//     for (const iface of interfaces[interfaceName]) {
-//       if (iface.family === 'IPv4' && !iface.internal) {
-//         return iface.address;
-//       }
-//     }
-//   }
-//   return '127.0.0.1';
-// }
-
-// *** MODIFICACIÓN CLAVE AQUI ***
-// Ahora updateIPInDatabase aceptará la URL como argumento
+// *** FUNCIÓN updateIPInDatabase ORIGINAL (fusionada con la lógica de Cloudflare) ***
 async function updateIPInDatabase(publicUrl) {
   try {
     const connection = await mysql.createConnection(dbConfig);
 
-    // Actualizar el registro con ID 1 siempre
-    await connection.execute(
-      `UPDATE Utils
-       SET ipv4 = ?, created_at = CURRENT_TIMESTAMP
-       WHERE id = 1`,
-      [publicUrl] // Usamos la URL pública de ngrok
+    // Intentar actualizar el registro con ID 1
+    const [updateResult] = await connection.execute(
+      `UPDATE Utils SET ipv4 = ?, created_at = CURRENT_TIMESTAMP WHERE id = 1`,
+      [publicUrl]
     );
 
-    // Si no existe el registro, crearlo
-    await connection.execute(
-      `INSERT INTO Utils (id, ipv4)
-       SELECT 1, ?
-       FROM DUAL
-       WHERE NOT EXISTS (SELECT 1 FROM Utils WHERE id = 1)`,
-      [publicUrl] // Usamos la URL pública de ngrok
-    );
+    // Si no se actualizó ninguna fila (es decir, el registro con id=1 no existe), entonces insertarlo
+    if (updateResult.affectedRows === 0) {
+      await connection.execute(
+        `INSERT INTO Utils (id, ipv4, created_at) VALUES (1, ?, CURRENT_TIMESTAMP)`,
+        [publicUrl]
+      );
+    }
 
-    console.log(`URL pública de ngrok actualizada correctamente en la base de datos: ${publicUrl}`);
+    console.log(`URL pública actualizada correctamente en la base de datos: ${publicUrl}`);
+    console.log(`¡IMPRESORA Y SISTEMA POS LISTOS PARA USARSE!`);
     await connection.end();
   } catch (error) {
     console.error('Error al actualizar URL pública:', error.message);
   }
 }
 
-function header(dateStr, timeStr, tableNumber, gameName) {
-  return (
-    'Hierba Mala Gastrobar\r\n' +
-    `*** ${dateStr} ${timeStr} ***\r\n` +
-    `Mesa: ${tableNumber}\r\n` +
-    `Juego: ${gameName}\r\n` +
-    '--------------------------\r\n'
-  );
+// Función para iniciar Cloudflare Tunnel y obtener la URL (sin cambios desde la última versión)
+async function startCloudflareTunnelAndGetUrl(apiPort) {
+  return new Promise((resolve, reject) => {
+    const cloudflaredPath = 'cloudflared';
+    const args = ['tunnel', '--url', `http://localhost:${apiPort}`];
+
+    console.log(`Iniciando cloudflared con: ${cloudflaredPath} ${args.join(' ')}`);
+
+    const cloudflaredProcess = spawn(cloudflaredPath, args);
+    let outputBuffer = '';
+    let urlFound = false;
+
+    const processData = (data) => {
+      const chunk = data.toString();
+      outputBuffer += chunk;
+      console.log(`[cloudflared] ${chunk.trim()}`);
+
+      if (!urlFound) {
+        const urlMatch = outputBuffer.match(/https:\/\/[a-zA-Z0-9.-]+\.trycloudflare\.com/);
+        if (urlMatch && urlMatch[0]) {
+          urlFound = true;
+          const publicUrl = urlMatch[0];
+          console.log(`Cloudflare Public URL obtenida de cloudflared: ${publicUrl}`);
+          resolve(publicUrl);
+        }
+      }
+    };
+
+    cloudflaredProcess.stdout.on('data', processData);
+    cloudflaredProcess.stderr.on('data', processData);
+
+    cloudflaredProcess.on('close', (code) => {
+      if (!urlFound) {
+        reject(new Error(`cloudflared se cerró con código ${code} sin encontrar la URL. Salida: ${outputBuffer}`));
+      } else {
+        console.log(`cloudflared se cerró con código ${code}.`);
+      }
+    });
+
+    cloudflaredProcess.on('error', (err) => {
+      console.error('Error al iniciar cloudflared:', err);
+      reject(err);
+    });
+
+    process.on('exit', () => {
+      if (!cloudflaredProcess.killed) {
+        console.log('Terminando proceso cloudflared...');
+        cloudflaredProcess.kill();
+      }
+    });
+    process.on('SIGINT', () => {
+      if (!cloudflaredProcess.killed) {
+        console.log('Terminando proceso cloudflared por SIGINT...');
+        cloudflaredProcess.kill();
+      }
+    });
+  });
 }
 
+// *** FUNCIÓN header ORIGINAL ***
+function header(dateStr, timeStr, tableNumber, gameInfo) {
+  let headerText = 'Hierba Mala Gastrobar\r\n';
+  headerText += `*** ${dateStr} ${timeStr} ***\r\n`;
+  headerText += `Mesa: ${tableNumber}\r\n`;
+  // Asumiendo que 'gameInfo' puede ser un string o un array de strings (como en el último JSON de ejemplo)
+  headerText += `Juego: ${Array.isArray(gameInfo) && gameInfo.length > 0 ? gameInfo.join(', ') : (gameInfo || 'N/A')}\r\n`;
+  headerText += '--------------------------\r\n';
+  return headerText;
+}
+
+// *** FUNCIÓN productLine ORIGINAL ***
 function productLine(p) {
-  let line = `${p.quantity}x ${p.name}  $${p.price * p.quantity}\r\n`;
+  let line = `${p.quantity}x ${p.name}   $${p.price * p.quantity}\r\n`;
   if (p.observation) {
     line += `\tObs: ${p.observation}\r\n`;
   }
   if (Array.isArray(p.additions) && p.additions.length > 0) {
     p.additions.forEach(a => {
-      line += `\t+ ${a.name}  $${a.price}\r\n`;
+      line += `\t+ ${a.name}   $${a.price}\r\n`;
     });
   }
   return line;
 }
 
+// *** FUNCIÓN footer ORIGINAL ***
 function footer(total) {
   return '--------------------------\r\n' + `TOTAL: $${total}\r\n`;
 }
 
+// *** ENDPOINT CAMBIADO A /print ***
 app.post('/print', (req, res) => {
-  const { products, total, tableNumber, game, availableGames } = req.body;
+  const { products, total, tableNumber, game, availableGames } = req.body; // 'game' también se recibe por si lo usas
 
   if (
     !products || !Array.isArray(products) || total == null ||
@@ -106,6 +157,8 @@ app.post('/print', (req, res) => {
   const timeStr = date.toLocaleTimeString('es-CO');
 
   let text = '';
+  // Se pasa 'availableGames' (que es un array en tu JSON más reciente) al header.
+  // La función header lo manejará para unirse o mostrar 'N/A'.
   text += header(dateStr, timeStr, tableNumber, availableGames);
 
   products.forEach(p => {
@@ -138,24 +191,16 @@ app.post('/print', (req, res) => {
   });
 });
 
-// *** MODIFICACIÓN CLAVE AQUI ***
-// No iniciamos el servidor aquí. Lo iniciará el script .bat
-// Y el script .bat pasará la URL de ngrok como un argumento al proceso Node.js.
-// Recibiremos la URL de ngrok como un argumento de línea de comandos.
-const ngrokPublicUrl = process.argv[2]; // El tercer elemento es el primer argumento (index 2)
+const PORT = process.env.PORT || 3011;
 
-if (ngrokPublicUrl) {
-  app.listen(3011, '0.0.0.0', async () => {
-    console.log("Impresora POS escuchando en http://localhost:3011");
-    console.log(`URL pública recibida: ${ngrokPublicUrl}`); // Log para depurar
-    await updateIPInDatabase(ngrokPublicUrl); // Ahora pasamos la URL de ngrok
-  });
-} else {
-  console.error("Error: No se proporcionó la URL pública de ngrok como argumento.");
-  console.log("Este script debe ser iniciado por el .bat con la URL de ngrok.");
-  // Si estás probando localmente sin ngrok, puedes descomentar la siguiente línea
-  // para que el servidor se inicie sin la URL de ngrok (pero no funcionará con Vercel por el HTTPS)
-  // app.listen(3011, '0.0.0.0', () => {
-  //   console.log("Impresora POS escuchando en http://localhost:3011 (modo de desarrollo sin ngrok URL)");
-  // });
-}
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`Impresora POS escuchando en http://localhost:${PORT}`);
+
+  try {
+    const cloudflarePublicUrl = await startCloudflareTunnelAndGetUrl(PORT);
+    // Usamos la función original updateIPInDatabase con la URL obtenida de Cloudflare
+    await updateIPInDatabase(cloudflarePublicUrl);
+  } catch (error) {
+    console.error('No se pudo iniciar Cloudflare Tunnel o obtener la URL:', error);
+  }
+});
