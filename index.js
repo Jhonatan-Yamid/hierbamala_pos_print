@@ -7,36 +7,39 @@ const app = express();
 const cors = require('cors');
 const mysql = require('mysql2/promise');
 
-// Configuración más explícita de CORS
 app.use(cors({
-  origin: '*', // Permite cualquier origen. En producción, deberías especificar tu dominio de Next.js (ej: 'https://tuapp.vercel.app')
-  methods: ['GET', 'POST', 'PUT', 'DELETE'], // Permite los métodos que usas
-  allowedHeaders: ['Content-Type'], // Permite la cabecera Content-Type
-  optionsSuccessStatus: 200 // Para algunos navegadores, 204 No Content puede ser problemático para preflight
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type'],
+  optionsSuccessStatus: 200
 }));
 app.use(express.json());
 
-// Configuración de la base de datos
+/* ======================================================
+   =================== CONFIG DB ========================
+   ====================================================== */
+
 const dbConfig = {
-  host: '195.179.237.102',
+  host: '193.203.166.236',
   user: 'u199394756_hierbamala',
   password: 'Hierbamala2024*',
   database: 'u199394756_hierbamala',
   port: 3306
 };
 
-// FUNCIÓN updateIPInDatabase ORIGINAL (fusionada con la lógica de Cloudflare)
+/* ======================================================
+   =========== UPDATE IP IN DB (TUNEL) ==================
+   ====================================================== */
+
 async function updateIPInDatabase(publicUrl) {
   try {
     const connection = await mysql.createConnection(dbConfig);
 
-    // Intentar actualizar el registro con ID 1
     const [updateResult] = await connection.execute(
       `UPDATE Utils SET ipv4 = ?, created_at = CURRENT_TIMESTAMP WHERE id = 1`,
       [publicUrl]
     );
 
-    // Si no se actualizó ninguna fila (es decir, el registro con id=1 no existe), entonces insertarlo
     if (updateResult.affectedRows === 0) {
       await connection.execute(
         `INSERT INTO Utils (id, ipv4, created_at) VALUES (1, ?, CURRENT_TIMESTAMP)`,
@@ -44,21 +47,22 @@ async function updateIPInDatabase(publicUrl) {
       );
     }
 
-    console.log(`URL pública actualizada correctamente en la base de datos: ${publicUrl}`);
+    console.log(`URL actualizada correctamente: ${publicUrl}`);
     console.log(`¡IMPRESORA Y SISTEMA POS LISTOS PARA USARSE!`);
     await connection.end();
   } catch (error) {
-    console.error('Error al actualizar URL pública:', error.message);
+    console.error('Error al actualizar URL:', error.message);
   }
 }
 
-// Función para iniciar Cloudflare Tunnel y obtener la URL (sin cambios desde la última versión)
+/* ======================================================
+   ================= CLOUDLFARED TUNNEL =================
+   ====================================================== */
+
 async function startCloudflareTunnelAndGetUrl(apiPort) {
   return new Promise((resolve, reject) => {
     const cloudflaredPath = 'cloudflared';
     const args = ['tunnel', '--url', `http://localhost:${apiPort}`];
-
-    console.log(`Iniciando cloudflared con: ${cloudflaredPath} ${args.join(' ')}`);
 
     const cloudflaredProcess = spawn(cloudflaredPath, args);
     let outputBuffer = '';
@@ -67,15 +71,12 @@ async function startCloudflareTunnelAndGetUrl(apiPort) {
     const processData = (data) => {
       const chunk = data.toString();
       outputBuffer += chunk;
-      console.log(`[cloudflared] ${chunk.trim()}`);
 
       if (!urlFound) {
         const urlMatch = outputBuffer.match(/https:\/\/[a-zA-Z0-9.-]+\.trycloudflare\.com/);
         if (urlMatch && urlMatch[0]) {
           urlFound = true;
-          const publicUrl = urlMatch[0];
-          console.log(`Cloudflare Public URL obtenida de cloudflared: ${publicUrl}`);
-          resolve(publicUrl);
+          resolve(urlMatch[0]);
         }
       }
     };
@@ -84,130 +85,224 @@ async function startCloudflareTunnelAndGetUrl(apiPort) {
     cloudflaredProcess.stderr.on('data', processData);
 
     cloudflaredProcess.on('close', (code) => {
-      if (!urlFound) {
-        reject(new Error(`cloudflared se cerró con código ${code} sin encontrar la URL. Salida: ${outputBuffer}`));
-      } else {
-        console.log(`cloudflared se cerró con código ${code}.`);
-      }
+      if (!urlFound) reject(new Error(`Cloudflared cerrado sin URL`));
     });
 
-    cloudflaredProcess.on('error', (err) => {
-      console.error('Error al iniciar cloudflared:', err);
-      reject(err);
-    });
-
-    process.on('exit', () => {
-      if (!cloudflaredProcess.killed) {
-        console.log('Terminando proceso cloudflared...');
-        cloudflaredProcess.kill();
-      }
-    });
-    process.on('SIGINT', () => {
-      if (!cloudflaredProcess.killed) {
-        console.log('Terminando proceso cloudflared por SIGINT...');
-        cloudflaredProcess.kill();
-      }
-    });
+    cloudflaredProcess.on('error', reject);
   });
 }
 
-// *** MODIFICADO: FUNCIÓN header - Añadido más espaciado ***
-function header(dateStr, timeStr, tableNumber, gameInfo, orderType) {
-  let headerText = 'Hierba Mala Gastrobar\r\n\r\n'; // Espacio adicional
-  headerText += `*** ${dateStr} ${timeStr} ***\r\n\r\n`; // Espacio adicional
-  headerText += `Mesa: ${tableNumber}\r\n`;
-  headerText += `Juego: ${Array.isArray(gameInfo) && gameInfo.length > 0 ? gameInfo.join(', ') : (gameInfo || 'N/A')}\r\n`;
-  headerText += `Tipo Pedido: ${orderType || 'N/A'}\r\n\r\n`; // Espacio adicional
-  headerText += '--------------------------\r\n';
-  return headerText;
+/* ======================================================
+   ============ NUEVO SISTEMA DE FORMATO TICKET =========
+   ====================================================== */
+
+const MAX_COLS = 32;
+
+/* ----------------------
+   Helpers de wrap
+   ---------------------- */
+
+function wrapWordsToWidth(text, width) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+
+  for (const w of words) {
+    if ((current + (current ? " " : "") + w).length <= width) {
+      current = current ? (current + " " + w) : w;
+    } else {
+      if (current) lines.push(current);
+      current = w;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
 }
 
-// *** MODIFICADO: FUNCIÓN productLine - Añadido más espaciado ***
-function productLine(p) {
-  let line = `${p.quantity}x ${p.name}   $${p.price * p.quantity}\r\n`;
-  if (p.observation) {
-    line += `\tObs: ${p.observation}\r\n`;
-  }
-  if (Array.isArray(p.additions) && p.additions.length > 0) {
-    p.additions.forEach(a => {
-      line += `\t+ ${a.name}   $${a.price}\r\n`;
+/* ----------------------
+   Formateadores
+   ---------------------- */
+
+function formatProductLine(name, qty, price) {
+  const priceStr = `$${price}`;
+  const reserved = priceStr.length + 1;
+  const textWidthFirst = MAX_COLS - reserved;
+
+  const fullTitle = `${qty? qty : 1}x ${name}`;
+  const titleLines = wrapWordsToWidth(fullTitle, textWidthFirst);
+
+  const first = titleLines[0] || "";
+  const pad = " ".repeat(Math.max(1, textWidthFirst - first.length));
+  let out = first + pad + " " + priceStr + "\n";
+
+  if (titleLines.length > 1) {
+    const contIndent = "    ";
+    const contWidth = MAX_COLS - contIndent.length;
+    const rest = titleLines.slice(1).join(" ");
+    const contLines = wrapWordsToWidth(rest, contWidth);
+    contLines.forEach(l => {
+      out += contIndent + l + "\n";
     });
   }
-  line += '\r\n'; // Espacio después de cada línea de producto/adición
-  return line;
+
+  return out;
 }
 
-// FUNCIÓN footer ORIGINAL
-function footer(total) {
-  return '--------------------------\r\n' + `TOTAL: $${total}\r\n`;
-}
+/* === OBSERVACIONES con doble sangría === */
+function formatObservation(text) {
+  const prefix = "  ° Obs: ";
+  const prefixLen = prefix.length;
+  const firstWidth = MAX_COLS - prefixLen;
 
-// *** MODIFICADO: ENDPOINT /print - Recibir orderType y generalObservation ***
-app.post('/print', (req, res) => {
-  const { products, total, tableNumber, game, availableGames, orderType, generalObservation } = req.body; // 'orderType' y 'generalObservation' recibidos
+  const parts = wrapWordsToWidth(text, firstWidth);
+  let out = "";
 
-  if (
-    !products || !Array.isArray(products) || total == null ||
-    tableNumber == null || availableGames == null || orderType == null
-  ) {
-    return res.status(400).send({ error: 'Faltan datos requeridos: products, total, tableNumber, availableGames, orderType' });
+  if (parts.length > 0) {
+    out += prefix + parts[0] + "\n";
+
+    if (parts.length > 1) {
+      const contIndent = "    ";
+      const contWidth = MAX_COLS - contIndent.length;
+      const rest = parts.slice(1).join(" ");
+      const contLines = wrapWordsToWidth(rest, contWidth);
+      contLines.forEach(l => (out += contIndent + l + "\n"));
+    }
+  } else {
+    out += prefix + "\n";
   }
 
+  return out;
+}
+
+/* === ADICIONES con doble sangría === */
+function formatAddition(name, price) {
+  const priceStr = `$${price}`;
+  const prefix = "  + ";
+  const reserved = priceStr.length + 1 + prefix.length;
+  const nameMaxFirst = MAX_COLS - reserved;
+
+  const nameParts = wrapWordsToWidth(name, nameMaxFirst);
+
+  let out = "";
+  const first = nameParts[0] || "";
+  const pad = " ".repeat(Math.max(1, nameMaxFirst - first.length));
+  out += prefix + first + pad + " " + priceStr + "\n";
+
+  if (nameParts.length > 1) {
+    const contIndent = "      ";
+    const contWidth = MAX_COLS - contIndent.length;
+    const rest = nameParts.slice(1).join(" ");
+    const contLines = wrapWordsToWidth(rest, contWidth);
+    contLines.forEach(l => (out += contIndent + l + "\n"));
+  }
+
+  return out;
+}
+
+function center(text) {
+  const spaces = Math.floor((MAX_COLS - text.length) / 2);
+  return " ".repeat(Math.max(spaces, 0)) + text + "\n";
+}
+
+/* ----------------------
+   Ticket completo
+   ---------------------- */
+
+function formatTicket({ products, total, tableNumber, orderType, availableGames, generalObservation }) {
   const date = new Date();
   const dateStr = date.toLocaleDateString('es-CO');
   const timeStr = date.toLocaleTimeString('es-CO');
 
-  let text = '';
-  // Se pasa 'orderType' al header
-  text += header(dateStr, timeStr, tableNumber, availableGames, orderType);
+  let out = "";
+  out += center("HIERBA MALA");
+  out += center("GASTROBAR");
+  out += "-".repeat(MAX_COLS) + "\n";
+  out += `FECHA: ${dateStr} ${timeStr}\n`;
+  out += `MESA: ${tableNumber}\n`;
+  out += `JUEGO: ${availableGames?.length ? availableGames.join(", ") : "N/A"}\n`;
+  out += `TIPO: ${orderType}\n`;
+  out += "-".repeat(MAX_COLS) + "\n";
 
   products.forEach(p => {
-    text += productLine(p);
+    out += formatProductLine(p.name, p.quantity, p.price * p.quantity);
+
+    if (p.observation?.trim()) {
+      out += formatObservation(p.observation);
+    }
+
+    if (p.additions?.length) {
+      p.additions.forEach(a => {
+        out += formatAddition(a.name, a.price);
+      });
+    }
+
+    out += "-".repeat(MAX_COLS) + "\n";
   });
 
-  text += footer(total);
+  const totalLineText = "TOTAL A PAGAR";
+  const totalPriceStr = `$${total}`;
+  const totalPad = MAX_COLS - totalLineText.length - totalPriceStr.length;
+  out += totalLineText + " ".repeat(Math.max(1, totalPad)) + totalPriceStr + "\n";
+  out += "-".repeat(MAX_COLS) + "\n";
 
-  // NUEVO: Añadir observaciones generales al final de la comanda
   if (generalObservation) {
-    text += `\r\nObservaciones Generales:\r\n`;
-    text += `${generalObservation}\r\n`;
+    out += "NOTA GENERAL:\n";
+    const generalWrapped = wrapWordsToWidth(generalObservation, MAX_COLS);
+    generalWrapped.forEach(l => (out += l + "\n"));
+    out += "-".repeat(MAX_COLS) + "\n";
   }
 
-  // NUEVO: Espaciado y línea punteada para el corte
-  text += '\r\n\r\n\r\n'; // Espacio
-  text += '--------------------------\r\n'; // Línea punteada
-  text += '\r\n\r\n'; // Espacio adicional después del corte
+  return out;
+}
 
-  const printerName = "IMPRESORA_TERMICA"; // Asegúrate de que este nombre sea el de tu impresora
+/* ======================================================
+   ===================== ENDPOINT PRINT =================
+   ====================================================== */
 
+app.post('/print', (req, res) => {
+  const { products, total, tableNumber, availableGames, orderType, generalObservation } = req.body;
+
+  if (!products || !Array.isArray(products) || total == null || !tableNumber || !orderType) {
+    return res.status(400).send({ error: 'Faltan datos requeridos' });
+  }
+
+  const text = formatTicket({
+    products,
+    total,
+    tableNumber,
+    orderType,
+    availableGames,
+    generalObservation
+  });
+
+  const printerName = "IMPRESORA_TERMICA";
   const tempFilePath = path.join(os.tmpdir(), 'ticket.txt');
 
-  fs.writeFile(tempFilePath, text, (err) => {
-    if (err) {
-      console.error('Error escribiendo archivo:', err);
-      return res.status(500).send({ error: 'Error generando ticket' });
-    }
+  fs.writeFile(tempFilePath, text, err => {
+    if (err) return res.status(500).send({ error: 'Error generando ticket' });
 
     const command = `copy /b "${tempFilePath}" \\\\localhost\\${printerName}`;
 
-    exec(command, (error, stdout, stderr) => {
-      fs.unlink(tempFilePath, () => { }); // Eliminar el archivo temporal
 
-      if (error) {
-        console.error('Error al imprimir:', error);
-        return res.status(500).send({ error: 'Error al imprimir' });
-      }
-      res.send({ success: true });
+    exec(command, error => {
+      fs.unlink(tempFilePath, () => {});
+
+      if (error) return res.status(500).send({ error: 'Error al imprimir' });
+
+      res.send({ success: true});
     });
   });
 });
 
+/* ======================================================
+   ===================== SERVER LISTEN ==================
+   ====================================================== */
+
 const PORT = process.env.PORT || 3011;
 
 app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`Impresora POS escuchando en http://localhost:${PORT}`);
-
-  try {
+  console.log(`POS escuchando en http://localhost:${PORT}`);
+    try {
     const cloudflarePublicUrl = await startCloudflareTunnelAndGetUrl(PORT);
     // Usamos la función original updateIPInDatabase con la URL obtenida de Cloudflare
     await updateIPInDatabase(cloudflarePublicUrl);
