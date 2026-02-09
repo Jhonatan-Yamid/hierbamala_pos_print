@@ -243,7 +243,7 @@ function formatTicket({ products, total, tableNumber, orderType, availableGames,
   const totalPriceStr = `$${total}`;
   const totalPad = MAX_COLS - totalLineText.length - totalPriceStr.length;
   out += totalLineText + " ".repeat(Math.max(1, totalPad)) + totalPriceStr + "\n";
-  out += "-".repeat(MAX_COLS) + "\n";
+  out += "-".repeat(MAX_COLS) + "\n\n\n\n";
 
   if (generalObservation) {
     out += "NOTA GENERAL:\n";
