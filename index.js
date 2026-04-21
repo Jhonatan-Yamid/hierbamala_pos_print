@@ -5,50 +5,31 @@ const os = require('os');
 const path = require('path');
 const app = express();
 const cors = require('cors');
-const mysql = require('mysql2/promise');
 
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type'],
-  optionsSuccessStatus: 200
-}));
+
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] }));
 app.use(express.json());
 
-/* ======================================================
-   =================== CONFIG DB ========================
-   ====================================================== */
+const VERCEL_BASE = 'https://hierbamala.vercel.app/api';
+app.use(express.json());
 
-const dbConfig = {
-  host: '193.203.166.236',
-  user: 'u199394756_hierbamala',
-  password: 'Hierbamala2024*',
-  database: 'u199394756_hierbamala',
-  port: 3306
-};
-
-/* ======================================================
-   =========== UPDATE IP IN DB (TUNEL) ==================
-   ====================================================== */
 
 async function updateIPInDatabase(publicUrl) {
   try {
-    const connection = await mysql.createConnection(dbConfig);
-    const [updateResult] = await connection.execute(
-      `UPDATE Utils SET ipv4 = ?, created_at = CURRENT_TIMESTAMP WHERE id = 1`,
-      [publicUrl]
-    );
-    if (updateResult.affectedRows === 0) {
-      await connection.execute(
-        `INSERT INTO Utils (id, ipv4, created_at) VALUES (1, ?, CURRENT_TIMESTAMP)`,
-        [publicUrl]
-      );
+    const response = await fetch(`${VERCEL_BASE}/update-printer-ip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publicUrl }),
+    });
+
+    if (response.ok) {
+      console.log(`URL actualizada en Vercel: ${publicUrl}`);
+      console.log(`IMPRESORA Y SISTEMA POS LISTOS PARA USARSE!`);
+    } else {
+      console.error('Vercel rechazó la actualización de IP');
     }
-    console.log(`URL actualizada correctamente: ${publicUrl}`);
-    console.log(`IMPRESORA Y SISTEMA POS LISTOS PARA USARSE!`);
-    await connection.end();
   } catch (error) {
-    console.error('Error al actualizar URL:', error.message);
+    console.error('Error al llamar update-printer-ip:', error.message);
   }
 }
 
@@ -63,19 +44,22 @@ async function updateIPInDatabase(publicUrl) {
 async function getCategoriesFromDB(productIds) {
   const map = new Map();
   if (!productIds || productIds.length === 0) return map;
+
   try {
-    const connection = await mysql.createConnection(dbConfig);
-    const placeholders = productIds.map(() => '?').join(',');
-    const [rows] = await connection.execute(
-      `SELECT id, category FROM Product WHERE id IN (${placeholders})`,
-      productIds
-    );
-    await connection.end();
-    for (const row of rows) {
-      map.set(row.id, row.category || 'Otros');
+    const response = await fetch(`${VERCEL_BASE}/print`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'getCategories', productIds }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      data.forEach((item) => {
+        map.set(item.id, item.category || 'Otros');
+      });
     }
   } catch (err) {
-    console.error('Error consultando categorias:', err.message);
+    console.error('Error consultando categorias en Vercel:', err.message);
   }
   return map;
 }
@@ -383,6 +367,7 @@ app.post('/print', async (req, res) => {
   }
 
   const text = formatTicket({ products, total, tableNumber, orderType, availableGames, generalObservation });
+  console.log(text);
 
   const printerName  = 'IMPRESORA_TERMICA';
   const tempFilePath = path.join(os.tmpdir(), 'ticket.txt');
