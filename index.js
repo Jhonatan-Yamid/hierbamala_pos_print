@@ -367,7 +367,6 @@ app.post('/print', async (req, res) => {
   }
 
   const text = formatTicket({ products, total, tableNumber, orderType, availableGames, generalObservation });
-  console.log(text);
 
   const printerName  = 'IMPRESORA_TERMICA';
   const tempFilePath = path.join(os.tmpdir(), 'ticket.txt');
