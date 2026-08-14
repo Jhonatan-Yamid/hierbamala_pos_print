@@ -301,7 +301,7 @@ function formatTicket({ products, total, tableNumber, orderType, availableGames,
     }
 
     const addTotal  = item.additions.reduce((s, a) => s + a.price, 0);
-    const unitPrice = item.price + addTotal;          // precio c/u con adiciones
+    const unitPrice = item.price;          // precio c/u con adiciones
     const lineTotal = unitPrice * item.quantity;      // total de esta linea
 
     out += productLine(item.name, item.quantity, lineTotal);
